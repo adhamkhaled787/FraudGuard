@@ -77,7 +77,9 @@ jobs:
         with:
           name: test-results
           path: .pytest_cache/
-
+      - name: Install Python dependencies
+        run: |
+          pip install numpy pandas scikit-learn xgboost joblib
   build-docker:
     name: Build Docker Image
     runs-on: ubuntu-latest
