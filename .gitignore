@@ -1,0 +1,23 @@
+# Large data files
+data/raw/
+data/processed/
+data/reports/
+
+# Model artifacts (too large for GitHub)
+models/
+
+# MLflow runs
+mlruns/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Environment
+.env
+
+# Mac
+.DS_Store

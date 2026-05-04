@@ -1,0 +1,14 @@
+pandas
+numpy
+scikit-learn
+xgboost
+imbalanced-learn
+mlflow
+fastapi
+uvicorn
+evidently
+apache-airflow
+pytest
+httpx
+python-dotenv
+joblib
