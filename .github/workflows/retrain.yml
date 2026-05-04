@@ -1,4 +1,15 @@
-test:
+name: FraudGuard CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 2 * * 1'  # every Monday at 2am
+
+jobs:
+  test:
     name: Run API Tests
     runs-on: ubuntu-latest
 
@@ -18,15 +29,9 @@ test:
                       imbalanced-learn fastapi uvicorn \
                       joblib scipy pytest httpx
 
-      - name: Download dataset
-        run: |
-          pip install kaggle
-          mkdir -p data/raw data/processed models
-          echo "Kaggle dataset would be downloaded here"
-          echo "For CI we generate synthetic test data instead"
-
       - name: Generate synthetic model for CI
         run: |
+          mkdir -p models data/processed
           python - << 'EOF'
           import numpy as np
           import pandas as pd
@@ -35,11 +40,9 @@ test:
           import joblib, os, json
 
           os.makedirs("models", exist_ok=True)
-          os.makedirs("data/processed", exist_ok=True)
-
-          # Synthetic data matching real feature structure
           np.random.seed(42)
           n = 1000
+
           X = pd.DataFrame(
               np.random.randn(n, 28),
               columns=[f"V{i}" for i in range(1, 29)]
@@ -47,26 +50,119 @@ test:
           X["Amount_scaled"] = np.random.randn(n)
           y = np.random.randint(0, 2, n)
 
-          # Train minimal model
           model = XGBClassifier(n_estimators=10, random_state=42)
           model.fit(X, y)
           joblib.dump(model, "models/fraudguard_model.pkl")
 
-          # Save scaler
           scaler = StandardScaler()
           amount_df = pd.DataFrame({"Amount": np.random.randn(n) * 100})
           scaler.fit(amount_df)
           joblib.dump(scaler, "models/amount_scaler.pkl")
 
-          # Save metrics
           metrics = {"f1": 0.75, "precision": 0.76,
                      "recall": 0.74, "roc_auc": 0.82,
                      "avg_precision": 0.78}
           with open("models/metrics.json", "w") as f:
               json.dump(metrics, f)
 
-          print("Synthetic model generated for CI ✓")
+          print("Synthetic model generated ✓")
           EOF
 
       - name: Run tests
         run: pytest tests/test_api.py -v
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: .pytest_cache/
+
+  build-docker:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate synthetic model for Docker build
+        run: |
+          mkdir -p models data/processed
+          python3 - << 'EOF'
+          import numpy as np
+          import pandas as pd
+          from sklearn.preprocessing import StandardScaler
+          from xgboost import XGBClassifier
+          import joblib, os, json
+
+          os.makedirs("models", exist_ok=True)
+          np.random.seed(42)
+          n = 1000
+
+          X = pd.DataFrame(
+              np.random.randn(n, 28),
+              columns=[f"V{i}" for i in range(1, 29)]
+          )
+          X["Amount_scaled"] = np.random.randn(n)
+          y = np.random.randint(0, 2, n)
+
+          model = XGBClassifier(n_estimators=10, random_state=42)
+          model.fit(X, y)
+          joblib.dump(model, "models/fraudguard_model.pkl")
+
+          scaler = StandardScaler()
+          amount_df = pd.DataFrame({"Amount": np.random.randn(n) * 100})
+          scaler.fit(amount_df)
+          joblib.dump(scaler, "models/amount_scaler.pkl")
+
+          metrics = {"f1": 0.75, "precision": 0.76,
+                     "recall": 0.74, "roc_auc": 0.82,
+                     "avg_precision": 0.78}
+          with open("models/metrics.json", "w") as f:
+              json.dump(metrics, f)
+          print("Model ready for Docker build ✓")
+          EOF
+
+      - name: Install dependencies for Docker build
+        run: |
+          pip install pandas numpy scikit-learn xgboost joblib
+
+      - name: Build Docker image
+        run: docker build -t fraudguard:latest .
+
+      - name: Test Docker health
+        run: |
+          docker run -d -p 8000:8000 \
+            --name fraudguard-test fraudguard:latest
+          sleep 15
+          curl -f http://localhost:8000/health || exit 1
+          echo "Docker health check passed ✓"
+          docker stop fraudguard-test
+
+  notify:
+    name: Pipeline Summary
+    runs-on: ubuntu-latest
+    needs: [test, build-docker]
+    if: always()
+
+    steps:
+      - name: Pipeline status
+        run: |
+          echo "================================"
+          echo "FraudGuard CI/CD Pipeline"
+          echo "================================"
+          echo "Tests:  ${{ needs.test.result }}"
+          echo "Docker: ${{ needs.build-docker.result }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Trigger: ${{ github.event_name }}"
+          echo "================================"
+          if [ "${{ needs.test.result }}" == "success" ] && \
+             [ "${{ needs.build-docker.result }}" == "success" ]; then
+            echo "✅ All checks passed"
+          else
+            echo "❌ Pipeline failed"
+            exit 1
+          fi
