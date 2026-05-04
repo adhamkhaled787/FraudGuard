@@ -6,7 +6,10 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    - cron: '0 2 * * 1'  # every Monday at 2am
+    - cron: '0 2 * * 1'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   test:
@@ -21,7 +24,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
 
       - name: Install dependencies
         run: |
@@ -29,57 +31,39 @@ jobs:
                       imbalanced-learn fastapi uvicorn \
                       joblib scipy pytest httpx
 
-      - name: Generate synthetic model for CI
+      - name: Generate synthetic model
         run: |
           mkdir -p models data/processed
-          python - << 'EOF'
+          python3 -c "
           import numpy as np
           import pandas as pd
           from sklearn.preprocessing import StandardScaler
           from xgboost import XGBClassifier
           import joblib, os, json
 
-          os.makedirs("models", exist_ok=True)
+          os.makedirs('models', exist_ok=True)
           np.random.seed(42)
           n = 1000
 
-          X = pd.DataFrame(
-              np.random.randn(n, 28),
-              columns=[f"V{i}" for i in range(1, 29)]
-          )
-          X["Amount_scaled"] = np.random.randn(n)
+          X = pd.DataFrame(np.random.randn(n, 28), columns=[f'V{i}' for i in range(1, 29)])
+          X['Amount_scaled'] = np.random.randn(n)
           y = np.random.randint(0, 2, n)
 
           model = XGBClassifier(n_estimators=10, random_state=42)
           model.fit(X, y)
-          joblib.dump(model, "models/fraudguard_model.pkl")
+          joblib.dump(model, 'models/fraudguard_model.pkl')
 
           scaler = StandardScaler()
-          amount_df = pd.DataFrame({"Amount": np.random.randn(n) * 100})
-          scaler.fit(amount_df)
-          joblib.dump(scaler, "models/amount_scaler.pkl")
+          scaler.fit(pd.DataFrame({'Amount': np.random.randn(n) * 100}))
+          joblib.dump(scaler, 'models/amount_scaler.pkl')
 
-          metrics = {"f1": 0.75, "precision": 0.76,
-                     "recall": 0.74, "roc_auc": 0.82,
-                     "avg_precision": 0.78}
-          with open("models/metrics.json", "w") as f:
-              json.dump(metrics, f)
-
-          print("Synthetic model generated ✓")
-          EOF
+          json.dump({'f1': 0.75, 'precision': 0.76, 'recall': 0.74, 'roc_auc': 0.82, 'avg_precision': 0.78}, open('models/metrics.json', 'w'))
+          print('Synthetic model generated')
+          "
 
       - name: Run tests
         run: pytest tests/test_api.py -v
 
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-results
-          path: .pytest_cache/
-      - name: Install Python dependencies
-        run: |
-          pip install numpy pandas scikit-learn xgboost joblib
   build-docker:
     name: Build Docker Image
     runs-on: ubuntu-latest
@@ -89,58 +73,54 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Generate synthetic model for Docker build
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install pandas numpy scikit-learn xgboost joblib
+
+      - name: Generate synthetic model
         run: |
           mkdir -p models data/processed
-          python3 - << 'EOF'
+          python3 -c "
           import numpy as np
           import pandas as pd
           from sklearn.preprocessing import StandardScaler
           from xgboost import XGBClassifier
           import joblib, os, json
 
-          os.makedirs("models", exist_ok=True)
+          os.makedirs('models', exist_ok=True)
           np.random.seed(42)
           n = 1000
 
-          X = pd.DataFrame(
-              np.random.randn(n, 28),
-              columns=[f"V{i}" for i in range(1, 29)]
-          )
-          X["Amount_scaled"] = np.random.randn(n)
+          X = pd.DataFrame(np.random.randn(n, 28), columns=[f'V{i}' for i in range(1, 29)])
+          X['Amount_scaled'] = np.random.randn(n)
           y = np.random.randint(0, 2, n)
 
           model = XGBClassifier(n_estimators=10, random_state=42)
           model.fit(X, y)
-          joblib.dump(model, "models/fraudguard_model.pkl")
+          joblib.dump(model, 'models/fraudguard_model.pkl')
 
           scaler = StandardScaler()
-          amount_df = pd.DataFrame({"Amount": np.random.randn(n) * 100})
-          scaler.fit(amount_df)
-          joblib.dump(scaler, "models/amount_scaler.pkl")
+          scaler.fit(pd.DataFrame({'Amount': np.random.randn(n) * 100}))
+          joblib.dump(scaler, 'models/amount_scaler.pkl')
 
-          metrics = {"f1": 0.75, "precision": 0.76,
-                     "recall": 0.74, "roc_auc": 0.82,
-                     "avg_precision": 0.78}
-          with open("models/metrics.json", "w") as f:
-              json.dump(metrics, f)
-          print("Model ready for Docker build ✓")
-          EOF
-
-      - name: Install dependencies for Docker build
-        run: |
-          pip install pandas numpy scikit-learn xgboost joblib
+          json.dump({'f1': 0.75, 'precision': 0.76, 'recall': 0.74, 'roc_auc': 0.82, 'avg_precision': 0.78}, open('models/metrics.json', 'w'))
+          print('Model ready for Docker build')
+          "
 
       - name: Build Docker image
         run: docker build -t fraudguard:latest .
 
       - name: Test Docker health
         run: |
-          docker run -d -p 8000:8000 \
-            --name fraudguard-test fraudguard:latest
+          docker run -d -p 8000:8000 --name fraudguard-test fraudguard:latest
           sleep 15
           curl -f http://localhost:8000/health || exit 1
-          echo "Docker health check passed ✓"
+          echo "Docker health check passed"
           docker stop fraudguard-test
 
   notify:
@@ -159,12 +139,10 @@ jobs:
           echo "Docker: ${{ needs.build-docker.result }}"
           echo "Commit: ${{ github.sha }}"
           echo "Branch: ${{ github.ref_name }}"
-          echo "Trigger: ${{ github.event_name }}"
           echo "================================"
-          if [ "${{ needs.test.result }}" == "success" ] && \
-             [ "${{ needs.build-docker.result }}" == "success" ]; then
-            echo "✅ All checks passed"
+          if [ "${{ needs.test.result }}" == "success" ] && [ "${{ needs.build-docker.result }}" == "success" ]; then
+            echo "All checks passed"
           else
-            echo "❌ Pipeline failed"
+            echo "Pipeline failed"
             exit 1
           fi
